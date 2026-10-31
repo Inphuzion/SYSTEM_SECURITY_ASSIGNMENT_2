@@ -204,10 +204,66 @@ static unsigned char *decrypt_buf(const unsigned char *in, size_t len, const rsa
 }
 
 
+/* Computes the signature s of in[0..len). Also returns the hash h. */
+static void sign_buf(mpz_t s, unsigned char h[32], const unsigned char *in, size_t len,
+                     const rsa_key *key) {
+    size_t k = key->bits / 8;
+    unsigned char *frame = malloc(k);
+    mpz_t m; mpz_init(m);
+    crypto_hash_sha256(h, in, len);                 /* h = SHA-256(file) */
+    make_frame(frame, k, MARK_SIG, h, 32);          /* same framing, marker 0x5A */
+    mpz_import(m, k, 1, 1, 1, 0, frame);
+    rsa_private(s, m, key);                         /* s = m^d mod n */
+    mpz_clear(m);
+    free(frame);
+}
+
+/* Returns 1 if valid. When invalid, prints to stderr which check failed. */
+static int verify_buf(const unsigned char *in, size_t len, int sig_bits,
+                      const char *sig_hash_hex, const mpz_t s, const rsa_key *key) {
+    size_t k = key->bits / 8;
+    unsigned char h[32];
+    char h_hex[65];
+    crypto_hash_sha256(h, in, len);
+    sodium_bin2hex(h_hex, sizeof h_hex, h, 32);
+
+    if (sig_bits != key->bits) {
+        fprintf(stderr, "check 1 failed: key length in signature (%d) != key (%d)\n",
+                sig_bits, key->bits);
+        return 0;
+    }
+    if (strcmp(sig_hash_hex, h_hex) != 0) {
+        fprintf(stderr, "check 2 failed: sha256 line does not match the file\n");
+        return 0;
+    }
+    if (mpz_cmp(s, key->n) >= 0) {
+        fprintf(stderr, "check 3 failed: s >= n\n");
+        return 0;
+    }
+    unsigned char *frame = malloc(k);
+    mpz_t m; mpz_init(m);
+    rsa_public(m, s, key);                          /* s^e mod n */
+    mpz_to_bytes(frame, k, m);
+    long flen = check_frame(frame, k, MARK_SIG);
+    int ok = 1;
+    if (flen != 32) {
+        fprintf(stderr, "check 4 failed: s^e mod n is not a valid 0x5A frame of length 32\n");
+        ok = 0;
+    } else if (memcmp(frame + 4, h, 32) != 0) {
+        fprintf(stderr, "check 5 failed: hash inside the frame != SHA-256 of the file\n");
+        ok = 0;
+    }
+    mpz_clear(m);
+    free(frame);
+    return ok;
+}
+
+
+
 int main(int argc, char *argv[]) {
-    const char *in_path = NULL, *out_path = NULL, *key_path = NULL;
+        const char *in_path = NULL, *out_path = NULL, *key_path = NULL, *sig_path = NULL;
     int opt, mode = 0, use_crt = 0;
-    while ((opt = getopt(argc, argv, "i:o:k:edc")) != -1) {
+        while ((opt = getopt(argc, argv, "i:o:k:edcsv:")) != -1) { 
         switch (opt) {
             case 'i': in_path = optarg; break;
             case 'o': out_path = optarg; break;
@@ -215,10 +271,12 @@ int main(int argc, char *argv[]) {
             case 'e': mode = 'e'; break;
             case 'd': mode = 'd'; break;
             case 'c': use_crt = 1; break;
+            case 's': mode = 's'; break;
+            case 'v': mode = 'v'; sig_path = optarg; break;
             default: return 1;
         }
     }
-    if (!mode || !in_path || !out_path || !key_path) { fprintf(stderr, "need -i -o -k and -e or -d\n"); return 1; }
+     if (!mode || !in_path || !key_path || (mode != 'v' && !out_path)) { fprintf(stderr, "missing arguments\n"); return 1; }
 
     rsa_key key; key_init(&key);
     if (load_key(key_path, &key)) return 1;
@@ -226,6 +284,37 @@ int main(int argc, char *argv[]) {
     size_t len, out_len;
     unsigned char *in = read_file(in_path, &len);
     if (!in) return 1;
+    if (mode == 's') {
+        mpz_t s; mpz_init(s);
+        unsigned char h[32];
+        char h_hex[65];
+        sign_buf(s, h, in, len, &key);
+        sodium_bin2hex(h_hex, sizeof h_hex, h, 32);
+        FILE *f = fopen(out_path, "w");
+        gmp_fprintf(f, "RSA-SIGNATURE %d\nsha256: %s\ns: %Zx\n", key.bits, h_hex, s);
+        fclose(f);
+        return 0;
+    }
+    if (mode == 'v') {
+        FILE *f = fopen(sig_path, "r");
+        if (!f) { perror(sig_path); return 1; }
+        int sig_bits = 0;
+        char hash_hex[128] = "", s_hex[4200] = "";
+        mpz_t s; mpz_init(s);
+        int parsed = fscanf(f, "RSA-SIGNATURE %d sha256: %127s s: %4199s", &sig_bits, hash_hex, s_hex) == 3
+                     && mpz_set_str(s, s_hex, 16) == 0;
+        fclose(f);
+        if (parsed && verify_buf(in, len, sig_bits, hash_hex, s, &key)) {
+            printf("Signature is VALID\n");
+            return 0;
+        }
+        if (!parsed) fprintf(stderr, "malformed signature file\n");
+        printf("Signature is INVALID\n");
+        return 2;
+    }
+
+
+
     unsigned char *out = (mode == 'e') ? encrypt_buf(in, len, &key, &out_len)
                                        : decrypt_buf(in, len, &key, use_crt, &out_len);
     if (!out) return 1;
