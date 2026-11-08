@@ -9,7 +9,7 @@
 #define MARK_ENC 0x3A
 #define MARK_SIG 0x5A
 
-/* ======================= Part A: key structure and files ======================= */
+/*  Part A: key structure and files  */
 
 typedef struct {
     int bits;            /* key length from the header, e.g. 2048 */
@@ -86,7 +86,7 @@ static int save_key(const char *path, const rsa_key *k) {
     return 0;
 }
 
-/* ======================= Part B: small file helpers ======================= */
+/*  Part B: small file helpers*/
 
 static unsigned char *read_file(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
@@ -101,7 +101,7 @@ static unsigned char *read_file(const char *path, size_t *len) {
     return buf;
 }
 
-/* ======================= Part C: framing and byte conversion ======================= */
+/* Part C: framing and byte conversion  */
 
 /* Builds a k-byte frame: 00 | marker | len (2 bytes BE) | chunk | FF..FF */
 static void make_frame(unsigned char *frame, size_t k, unsigned char marker,
@@ -133,7 +133,7 @@ static void mpz_to_bytes(unsigned char *out, size_t k, const mpz_t x) {
     mpz_export(out + (k - need), &count, 1, 1, 1, 0, x);
 }
 
-/* ======================= Part D: RSA core ======================= */
+/*  Part D: RSA core */
 
 static void rsa_public(mpz_t out, const mpz_t m, const rsa_key *k) {
     mpz_powm(out, m, k->e, k->n);
@@ -164,7 +164,7 @@ static void rsa_private_crt(mpz_t m, const mpz_t c, const rsa_key *k) {
     mpz_clears(dp, dq, qinv, mp, mq, h, t, NULL);
 }
 
-/* ======================= Part E: operations on buffers ======================= */
+/*  Part E: operations on buffers  */
 
 /* Encrypts in[0..len) into a newly allocated buffer of nblocks*k bytes. */
 static unsigned char *encrypt_buf(const unsigned char *in, size_t len, const rsa_key *key,
@@ -277,7 +277,7 @@ static int verify_buf(const unsigned char *in, size_t len, int sig_bits,
     return ok;
 }
 
-/* ======================= Part F: key generation ======================= */
+/*  Part F: key generation  */
 
 static gmp_randstate_t rstate;
 
@@ -318,7 +318,7 @@ static void generate_key(rsa_key *pub, rsa_key *priv, int bits) {
     mpz_clears(lambda, t, NULL);
 }
 
-/* ======================= Part G: performance analysis ======================= */
+/* Part G: performance analysis  */
 
 static size_t mem_current = 0, mem_peak = 0;
 
@@ -413,7 +413,7 @@ static int performance(const char *in_path, const char *out_path) {
     return 0;
 }
 
-/* ======================= Part H: main ======================= */
+/*  Part H: main  */
 
 static void usage(void) {
     printf("Usage:\n"
